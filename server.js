@@ -8,6 +8,7 @@ const userRoutes = require('./routes/userRoutes.js');
 const movieRoutes = require('./routes/movieRoutes.js');
 const bookingRoutes = require('./routes/bookingRoutes.js');
 const adminRoutes = require('./routes/adminRoutes.js');
+const cartRoutes = require('./routes/cartRoutes.js');
 
 // Load env vars
 dotenv.config();
@@ -26,6 +27,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/movies', movieRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/cart', cartRoutes);
 
 // Basic route
 app.get('/', (req, res) => {
