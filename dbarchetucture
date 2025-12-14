@@ -1,0 +1,240 @@
+DB ARCHITECTURE — MovieMagic Backend
+
+Overview
+--------
+This document describes the MongoDB data model used by the MovieMagic backend, the schema of each collection, indexes, and the relationships between collections. The models below reflect the current backend code in this repo and new features (Feedback, Payment). Use this as a reference for frontend integration, queries and migrations.
+
+Models / Collections
+--------------------
+1) users
+2) movies
+3) bookings
+4) carts
+5) feedbacks
+6) payments
+
+Note: Each collection uses Mongoose in the codebase; types below reflect typical Mongoose field types.
+
+1) users
+-------
+- Collection name: `users`
+- Purpose: authentication, user profile, roles
+
+Fields:
+- _id: ObjectId
+- name: String
+- email: String (unique index)
+- password: String (hashed)
+- role: String (enum: ['user','admin']) default 'user'
+- userType: String (eg 'free'|'pro') optional
+- createdAt, updatedAt: Date (timestamps)
+
+Indexes:
+- email: unique
+- role: (optional) for admin queries
+
+Sample document:
+{
+  _id: ObjectId("60a..."),
+  name: "Alice",
+  email: "alice@example.com",
+  password: "<bcrypt-hash>",
+  role: "user",
+  userType: "free",
+  createdAt: ISODate(...)
+}
+
+2) movies
+---------
+- Collection name: `movies`
+- Purpose: movie metadata for listing/searching
+
+Fields:
+- _id: ObjectId
+- title: String
+- description: String
+- genre: String or [String]
+- price: Number (price per seat or base price)
+- image: String (url or path)
+- duration: Number (minutes)
+- createdAt, updatedAt: Date
+
+Indexes:
+- title: text index (optional) for search
+- genre: index
+
+3) bookings
+-----------
+- Collection name: `bookings`
+- Purpose: records of completed bookings (confirmed purchases)
+
+Fields:
+- _id: ObjectId
+- user: ObjectId -> `users._id` (required)
+- movie: ObjectId -> `movies._id` (required)
+- bookingDate: Date (or ISO date string)
+- showtime: String (time slot label)
+- seats: [String] (seat identifiers: 'A1','B2')
+- pricePerSeat: Number
+- totalPrice: Number
+- payment: ObjectId -> `payments._id` (optional, points to completed payment)
+- createdAt, updatedAt: Date
+
+Indexes:
+- user: index (to query user bookings)
+- movie: index (to query bookings per movie or seat availability)
+
+4) carts
+--------
+- Collection name: `carts`
+- Purpose: temporary storage of items a user intends to book
+
+Fields:
+- _id: ObjectId
+- user: ObjectId -> `users._id` (required)
+- items: [
+    {
+      _id: ObjectId,
+      movie: ObjectId -> `movies._id`,
+      bookingDate: Date,
+      showtime: String,
+      seats: [String],
+      pricePerSeat: Number,
+      totalPrice: Number,
+      addedAt: Date
+    }
+  ]
+- totalCartPrice: Number
+- createdAt, updatedAt: Date
+
+Indexes:
+- user: index (one cart per user in the app logic; schema not enforcing unique but code treats single cart)
+
+Cardinality:
+- user 1 -> 1 cart (application-level assumption)
+- cart contains many items
+
+5) feedbacks
+------------
+- Collection name: `feedbacks`
+- Purpose: store user feedback / ratings for movies
+
+Fields:
+- _id: ObjectId
+- user: ObjectId -> `users._id` (required)
+- movie: ObjectId -> `movies._id` (optional, null if product-level comment absent)
+- rating: Number (1-5) optional
+- comment: String optional
+- createdAt, updatedAt: Date
+
+Indexes:
+- movie: index (to fetch feedbacks for a movie)
+- user: index
+
+6) payments
+-----------
+- Collection name: `payments`
+- Purpose: record payments (Stripe flow implemented)
+
+Fields:
+- _id: ObjectId
+- user: ObjectId -> `users._id` (required)
+- amount: Number (decimal; stored as float in app, ensure rounding when sending to payment gateway)
+- method: String (enum: ['stripe'])
+- status: String (enum: ['pending','success','failed'])
+- transactionId: String (e.g., Stripe PaymentIntent id)
+- meta: Mixed (object to store paymentIntent id, orderId, stripePaymentIntentId etc.)
+- createdAt, updatedAt: Date
+
+Indexes:
+- user: index
+- meta.stripePaymentIntentId: index (optional) for reverse lookup
+
+Relationships / ER Mapping
+--------------------------
+- users -< bookings  (one user can have many bookings)
+- users -< carts     (application: one cart per user; cart contains many items)
+- users -< feedbacks (one user can post many feedbacks)
+- users -< payments  (one user can make many payments)
+- movies -< bookings (one movie can have many bookings)
+- movies -< feedbacks (one movie can have many feedbacks)
+- payments -> bookings (optional link: a booking may reference the payment used)
+
+Access Patterns & Typical Queries
+---------------------------------
+- Get movies list: find on `movies` with text/genre filter
+- Get movie details + feedback: find `movies` by id then `feedbacks.find({ movie: id })`
+- Add to cart: find cart by user, push item into `items` array, recalc total
+- Checkout: create `bookings` from cart items, create `payments` record (status pending), process payment, on success update `payments.status` and attach `payment._id` to booking and clear cart
+- User bookings: `bookings.find({ user: userId })`
+- Admin: `bookings.find()` with date range, `users.find()` etc.
+
+Schema & Data Integrity Notes
+-----------------------------
+- Use application logic to ensure single active cart per user (schema doesn't force unique user index to avoid race conditions); you can change to `unique: true` if you handle duplicate key properly.
+- Payments: When storing amounts, prefer storing a `amountCents` integer if you want to avoid floating point rounding errors for currency arithmetic; convert decimals to cents before creating PaymentIntent.
+- Seat availability: booking creation should check for seat conflicts (query bookings for same movie, date, showtime and ensure seats not taken). Consider index on { movie, bookingDate, showtime } for fast seat checks.
+
+Indexes Summary
+---------------
+- users.email: unique
+- movies.title: (optional) text index
+- movies.genre: index
+- bookings.user: index
+- bookings.movie: index
+- carts.user: index
+- feedbacks.movie: index
+- feedbacks.user: index
+- payments.user: index
+- payments.meta.stripePaymentIntentId: index (optional)
+
+Sample Booking Flow (atomicity)
+-------------------------------
+1) User clicks checkout.
+2) Server verifies seat availability: `bookings.find({ movie, bookingDate, showtime, seats: { $in: requestedSeats } })` => if any => fail.
+3) Create PaymentIntent (Stripe) and local `payments` doc with status 'pending'.
+4) Client confirms payment with Stripe using `client_secret`.
+5) Webhook or server verify marks `payments.status='success'`.
+6) On success: create `bookings` documents, attach `payment` field to bookings, remove seats from cart.
+
+Recommended Improvements
+------------------------
+- Add unique composite index on bookings to detect duplicate seat bookings quickly, e.g. index on { movie:1, bookingDate:1, showtime:1, 'seats': 1 } (or maintain a seat allocation collection).
+- Consider storing `amountCents` (integer) on payments and bookings instead of floats.
+- For high-concurrency seat reservations, consider a reservation TTL collection (locks) or optimistic concurrency with retries.
+- Add TTL or cleanup jobs for abandoned carts (older than X hours).
+
+Migration Notes
+---------------
+- If switching from floating `amount` to `amountCents`, write a one-time migration to update existing `payments` and `bookings`:
+  - amountCents = Math.round(amount * 100)
+
+Diagrams (ASCII)
+-----------------
+Users
+  || 1..*
+Bookings
+
+Users (1) ---> (1) Carts ---> (N) Cart.items
+Users (1) ---> (N) Bookings
+Users (1) ---> (N) Feedbacks
+Movies (1) ---> (N) Bookings
+Movies (1) ---> (N) Feedbacks
+Payments (N) ---> Bookings (optional link from booking -> payment)
+
+Quick reference: collection -> important relations
+- users._id referenced by: carts.user, bookings.user, feedbacks.user, payments.user
+- movies._id referenced by: carts.items.movie, bookings.movie, feedbacks.movie
+
+Operational Notes
+-----------------
+- Ensure MongoDB has sufficient indexes before launch; missing indexes on booking/seat lookup will cause queries to be slow.
+- Monitor payments for duplicates: use metadata/stripePaymentIntentId to deduplicate.
+- For audit, keep timestamps and consider storing `createdBy`, `updatedBy` where relevant.
+
+If you want, I can also:
+- Generate a visual ER diagram (SVG) and add it to repo
+- Create sample aggregation queries (e.g., average rating per movie, bookings per day)
+- Add a migration script to convert existing amount -> amountCents
+
+End of document
