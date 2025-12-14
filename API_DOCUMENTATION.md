@@ -167,6 +167,76 @@ Response: { success, stats }
 ```
 
 ---
+## Feedback Endpoints
+
+### Submit Feedback
+```
+POST /feedback
+Auth: Required
+Body: { movieId?: string, rating?: number (1-5), comment?: string }
+Response: { success, message, feedback }
+```
+
+### Get All Feedbacks
+```
+GET /feedback
+Auth: Not required
+Response: { success, feedbacks }
+```
+
+### Get Feedbacks For Movie
+```
+GET /feedback/movie/:movieId
+Auth: Not required
+Response: { success, feedbacks }
+```
+
+### Get Current User Feedbacks
+```
+GET /feedback/user
+Auth: Required
+Response: { success, feedbacks }
+```
+
+### Delete Feedback (Admin)
+```
+DELETE /feedback/:id
+Auth: Required (Admin)
+Response: { success, message }
+```
+
+---
+
+## Payment (Stripe) Endpoints
+
+### Create PaymentIntent
+```
+POST /payment/stripe/create
+Auth: Required
+Body: { amount: number (decimal, e.g. 12.5), currency?: string, meta?: object }
+Response (201): { success, message, paymentId, clientSecret, stripePaymentIntentId, publishableKey }
+```
+
+### Verify PaymentIntent
+```
+POST /payment/stripe/verify
+Auth: Required
+Body: { paymentId?: string, stripePaymentIntentId?: string }
+Response: { success, message, payment }
+```
+
+### Get Payment Status
+```
+GET /payment/:id
+Auth: Required (owner or admin)
+Response: { success, payment }
+```
+
+Notes:
+- The frontend needs Stripe's publishable key to initialize Stripe.js. Set `VITE_STRIPE_PUBLISHABLE_KEY` in frontend env or return `publishableKey` from the create endpoint and initialize Stripe dynamically.
+- Server must have `STRIPE_SECRET_KEY` in `.env` to contact Stripe.
+
+---
 
 ## Error Response Format
 ```json
